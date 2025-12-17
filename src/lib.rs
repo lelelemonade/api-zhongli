@@ -1,9 +1,14 @@
 use axum::{routing::get, Router};
 use tower_service::Service;
+use tower_http::cors::CorsLayer;
 use worker::*;
 
 fn router() -> Router {
-    Router::new().route("/", get(root))
+    let cors = CorsLayer::new()
+        .allow_origin("https://zhongli.dev".parse::<axum::http::HeaderValue>().unwrap())
+        .allow_methods([axum::http::Method::GET]);
+
+    Router::new().route("/", get(root)).layer(cors)
 }
 
 #[event(fetch)]
