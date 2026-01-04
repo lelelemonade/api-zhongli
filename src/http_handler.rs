@@ -1,8 +1,7 @@
-use lambda_http::{Body, Error, Request, Response};
 use aws_config::BehaviorVersion;
 use aws_sdk_sts::Client as StsClient;
-use serde::{Serialize};
-use std::env;
+use lambda_http::{Body, Error, Request, Response};
+use serde::Serialize;
 
 #[derive(Serialize)]
 struct S3Credentials {
@@ -24,7 +23,7 @@ pub(crate) async fn function_handler(event: Request) -> Result<Response<Body>, E
     println!("Received request: {:?}", event);
 
     match (method.as_str(), path) {
-        ("POST", "/testStage/credentials") => get_s3_credentials().await,
+        ("POST", "/Prod/api-zhongli") => get_s3_credentials().await,
         _ => {
             let error = ErrorResponse {
                 error: format!("Received request: {:?}", event),
@@ -40,14 +39,15 @@ pub(crate) async fn function_handler(event: Request) -> Result<Response<Body>, E
 }
 
 async fn get_s3_credentials() -> Result<Response<Body>, Error> {
-    let bucket_name = "arn:aws:iam::658140043938:role/api-zhongli";
-    
-    let role_arn = "storage-zhongli-dev--eun1-az1--x-s3";
+    let role_arn = "arn:aws:iam::658140043938:role/api-zhongli";
+
+    let bucket_name = "storage-zhongli-dev";
 
     let config = aws_config::load_defaults(BehaviorVersion::latest()).await;
     let sts_client = StsClient::new(&config);
 
-    let policy = format!(r#"{{
+    let policy = format!(
+        r#"{{
         "Version": "2012-10-17",
         "Statement": [
             {{
@@ -57,11 +57,20 @@ async fn get_s3_credentials() -> Result<Response<Body>, Error> {
                     "s3:PutObject"
                 ],
                 "Resource": "arn:aws:s3:::{}/*"
+            }},
+            {{
+                "Effect": "Allow",
+                "Action": [
+                    "s3:ListBucket"
+                ],
+                "Resource": "arn:aws:s3:::{}"
             }}
         ]
-    }}"#, bucket_name);
+    }}"#,
+        bucket_name, bucket_name
+    );
 
-    let assume_role_result = sts_client
+    let assume_role_result = match sts_client
         .assume_role()
         .role_arn(role_arn)
         .role_session_name("blog-frontend-session")
@@ -69,9 +78,22 @@ async fn get_s3_credentials() -> Result<Response<Body>, Error> {
         .duration_seconds(3600) // 1 hour
         .send()
         .await
-        .map_err(|e| format!("Failed to assume role: {},", e.to_string()))?;
+    {
+        Ok(resp) => {
+            // Print the whole SDK response for debugging
+            println!("AssumeRole raw response: {:#?}", resp);
+            resp
+        }
+        Err(sdk_err) => {
+            // Print the raw SDK error (full debug)
+            eprintln!("Failed to assume role (raw SDK error): {:#?}", sdk_err);
+            // Return the SDK error wrapped as the function's Error
+            return Err(Box::new(sdk_err));
+        }
+    };
 
-    let credentials = assume_role_result.credentials()
+    let credentials = assume_role_result
+        .credentials()
         .ok_or("No credentials returned")?;
 
     let s3_creds = S3Credentials {
@@ -89,7 +111,7 @@ async fn get_s3_credentials() -> Result<Response<Body>, Error> {
         .header("access-control-allow-headers", "Content-Type")
         .body(serde_json::to_string(&s3_creds)?.into())
         .map_err(Box::new)?;
-    
+
     Ok(resp)
 }
 
